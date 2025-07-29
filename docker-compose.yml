@@ -1,0 +1,100 @@
+version: "3.8"
+
+services:
+  # LiteLLM proxy – always on
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config.yml:/app/config.yml  # Mount the config file
+    command: --config /app/config.yml --debug --port 4000 # Use config file and add debug for better visibility
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Base worker definition (NOT started – just an anchor for reuse)
+  # ---------------------------------------------------------------------------
+  _worker-base: &worker-base
+    build: ./worker
+    depends_on:
+      - litellm
+    environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
+      - SPLIT=test          # default; override per-dataset when needed
+      - MODEL_NAME=litellm/gemini-flash-lite
+      - HF_HOME=/root/.cache/huggingface
+    profiles: ["_ignore"]   # this hidden profile prevents the anchor from being run
+    volumes:
+      - ./hf_cache:/root/.cache/huggingface
+
+  # ---------------------------------------------------------------------------
+  # One service per dataset – enabled only when its profile is selected.
+  # Use `docker compose --profile ami --profile earnings22 up` etc.
+  # ---------------------------------------------------------------------------
+
+  worker_ami:
+    <<: *worker-base
+    profiles: ["ami"]
+    environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
+      - DATASET=ami
+      - SPLIT=test
+      - MODEL_NAME=litellm/gemini-flash-lite
+
+  worker_earnings22:
+    <<: *worker-base
+    profiles: ["earnings22"]
+    environment:
+      - DATASET=earnings22
+      - SPLIT=test
+      - MODEL_NAME=litellm/gemini-flash-lite
+
+  worker_gigaspeech:
+    <<: *worker-base
+    profiles: ["gigaspeech"]
+    environment:
+      - DATASET=gigaspeech
+      - SPLIT=test
+      - MODEL_NAME=litellm/gemini-flash-lite
+
+  worker_librispeech_clean:
+    <<: *worker-base
+    profiles: ["librispeech_clean"]
+    environment:
+      - DATASET=librispeech
+      - SPLIT=test.clean
+      - MODEL_NAME=litellm/gemini-flash-lite
+
+  worker_librispeech_other:
+    <<: *worker-base
+    profiles: ["librispeech_other"]
+    environment:
+      - DATASET=librispeech
+      - SPLIT=test.other
+      - MODEL_NAME=litellm/gemini-flash-lite
+
+  worker_spgispeech:
+    <<: *worker-base
+    profiles: ["spgispeech"]
+    environment:
+      - DATASET=spgispeech
+      - SPLIT=test
+      - MODEL_NAME=litellm/gemini-flash-lite
+
+  worker_tedlium:
+    <<: *worker-base
+    profiles: ["tedlium"]
+    environment:
+      - DATASET=tedlium
+      - SPLIT=test
+      - MODEL_NAME=litellm/gemini-flash-lite
+
+  worker_voxpopuli:
+    <<: *worker-base
+    profiles: ["voxpopuli"]
+    environment:
+      - DATASET=voxpopuli
+      - SPLIT=test
+      - MODEL_NAME=litellm/gemini-flash-lite 
