@@ -31,7 +31,7 @@ def get_available_datasets(compose_file):
         st.error(f"Error parsing docker-compose.yml: {e}")
         return []
 
-def launch_benchmark(datasets):
+def launch_benchmark(datasets, max_samples):
     """Constructs and runs the docker compose command, showing output."""
     if not datasets:
         st.warning("Please select at least one dataset to benchmark.")
@@ -71,9 +71,14 @@ def launch_benchmark(datasets):
     st.session_state.benchmark_running = True
     st.session_state.last_benchmark_start_time = datetime.now()
 
+    # Prepare environment for subprocess
+    env = os.environ.copy()
+    if max_samples:
+        env["MAX_SAMPLES"] = str(max_samples)
+
     with st.expander("Benchmark Launch Logs", expanded=True):
         try:
-            process = subprocess.Popen(command, cwd=DOCKER_COMPOSE_FILE.parent, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            process = subprocess.Popen(command, cwd=DOCKER_COMPOSE_FILE.parent, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             st.session_state.benchmark_process = process
             
             log_placeholder = st.empty()
@@ -135,8 +140,10 @@ with st.sidebar:
         label_visibility="collapsed"
     )
 
+    max_samples = st.number_input("Max samples per dataset", min_value=1, value=15, step=1)
+
     if st.button("Benchmark Now", use_container_width=True):
-        launch_benchmark(selected_datasets)
+        launch_benchmark(selected_datasets, max_samples)
 
 
 # --- Main Panel for Results ---

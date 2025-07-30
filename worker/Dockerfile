@@ -24,4 +24,4 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH=/app
 
 # Default command now runs evaluation automatically based on env vars (DATASET_PATH, DATASET, SPLIT, MODEL_NAME)
-CMD ["/bin/sh", "-c", "python run_eval.py --dataset_path $DATASET_PATH --dataset $DATASET --split $SPLIT --model_name $MODEL_NAME --max_samples 1"] 
+CMD ["/bin/sh", "-c", "python run_eval.py --dataset_path $DATASET_PATH --dataset $DATASET --split $SPLIT --model_name $MODEL_NAME"] 

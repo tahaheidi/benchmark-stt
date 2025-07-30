@@ -2,7 +2,6 @@ import argparse
 from typing import Optional
 import datasets
 import evaluate
-import soundfile as sf
 import tempfile
 import time
 import os
@@ -10,20 +9,8 @@ import requests
 import itertools
 from tqdm import tqdm
 from dotenv import load_dotenv
-from io import BytesIO
-import assemblyai as aai
-import openai
 from google import genai
 import google.genai.types as genai_types
-from elevenlabs.client import ElevenLabs
-from rev_ai import apiclient
-from rev_ai.models import CustomerUrlData
-from normalizer import data_utils
-import concurrent.futures
-from speechmatics.models import ConnectionSettings, BatchTranscriptionConfig, FetchData
-from speechmatics.batch_client import BatchClient
-from httpx import HTTPStatusError
-from requests_toolbelt import MultipartEncoder
 import base64
 from pathlib import Path
 import litellm
@@ -82,189 +69,7 @@ def transcribe_with_retry(
     retries = 0
     while retries <= max_retries:
         try:
-            PREFIX = "speechmatics/"
-            if model_name.startswith(PREFIX):
-                api_key = os.getenv("SPEECHMATICS_API_KEY")
-                if not api_key:
-                    raise ValueError(
-                        "SPEECHMATICS_API_KEY environment variable not set"
-                    )
-
-                settings = ConnectionSettings(
-                    url="https://asr.api.speechmatics.com/v2", auth_token=api_key
-                )
-                with BatchClient(settings) as client:
-                    config = BatchTranscriptionConfig(
-                        language="en",
-                        enable_entities=True,
-                        operating_point=model_name[len(PREFIX) :],
-                    )
-
-                    job_id = None
-                    audio_url = None
-                    try:
-                        if use_url:
-                            audio_url = sample["row"]["audio"][0]["src"]
-                            config.fetch_data = FetchData(url=audio_url)
-                            multipart_data = MultipartEncoder(
-                                fields={"config": config.as_config().encode("utf-8")}
-                            )
-                            response = client.send_request(
-                                "POST",
-                                "jobs",
-                                data=multipart_data.to_string(),
-                                headers={"Content-Type": multipart_data.content_type},
-                            )
-                            job_id = response.json()["id"]
-                        else:
-                            job_id = client.submit_job(audio_file_path, config)
-
-                        transcript = client.wait_for_completion(
-                            job_id, transcription_format="txt"
-                        )
-                        return transcript
-                    except HTTPStatusError as e:
-                        if e.response.status_code == 401:
-                            raise ValueError(
-                                "Invalid Speechmatics API credentials"
-                            ) from e
-                        elif e.response.status_code == 400:
-                            raise ValueError(
-                                f"Speechmatics API responded with 400 Bad request: {e.response.text}"
-                            )
-                        raise e
-                    except Exception as e:
-                        if job_id is not None:
-                            status = client.check_job_status(job_id)
-                            if (
-                                audio_url is not None
-                                and "job" in status
-                                and "errors" in status["job"]
-                                and isinstance(status["job"]["errors"], list)
-                                and len(status["job"]["errors"]) > 0
-                            ):
-                                errors = status["job"]["errors"]
-                                if "message" in errors[-1] and "failed to fetch file" in errors[-1]["message"]:
-                                    retries = max_retries + 1
-                                    raise Exception(f"could not fetch URL {audio_url}, not retrying")
-
-                        raise Exception(
-                            f"Speechmatics transcription failed: {str(e)}"
-                        ) from e
-
-            elif model_name.startswith("assembly/"):
-                aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
-                transcriber = aai.Transcriber()
-                config = aai.TranscriptionConfig(
-                    speech_model=model_name.split("/")[1],
-                    language_code="en",
-                )
-                if use_url:
-                    audio_url = sample["row"]["audio"][0]["src"]
-                    audio_duration = sample["row"]["audio_length_s"]
-                    if audio_duration < 0.160:
-                        print(f"Skipping audio duration {audio_duration}s")
-                        return "."
-                    transcript = transcriber.transcribe(audio_url, config=config)
-                else:
-                    audio_duration = (
-                        len(sample["audio"]["array"]) / sample["audio"]["sampling_rate"]
-                    )
-                    if audio_duration < 0.160:
-                        print(f"Skipping audio duration {audio_duration}s")
-                        return "."
-                    transcript = transcriber.transcribe(audio_file_path, config=config)
-
-                if transcript.status == aai.TranscriptStatus.error:
-                    raise Exception(
-                        f"AssemblyAI transcription error: {transcript.error}"
-                    )
-                return transcript.text
-
-            elif model_name.startswith("openai/"):
-                if use_url:
-                    response = requests.get(sample["row"]["audio"][0]["src"])
-                    audio_data = BytesIO(response.content)
-                    response = openai.Audio.transcribe(
-                        model=model_name.split("/")[1],
-                        file=audio_data,
-                        response_format="text",
-                        language="en",
-                        temperature=0.0,
-                    )
-                else:
-                    with open(audio_file_path, "rb") as audio_file:
-                        response = openai.Audio.transcribe(
-                            model=model_name.split("/")[1],
-                            file=audio_file,
-                            response_format="text",
-                            language="en",
-                            temperature=0.0,
-                        )
-                return response.strip()
-
-            elif model_name.startswith("elevenlabs/"):
-                client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-                if use_url:
-                    response = requests.get(sample["row"]["audio"][0]["src"])
-                    audio_data = BytesIO(response.content)
-                    transcription = client.speech_to_text.convert(
-                        file=audio_data,
-                        model_id=model_name.split("/")[1],
-                        language_code="eng",
-                        tag_audio_events=True,
-                    )
-                else:
-                    with open(audio_file_path, "rb") as audio_file:
-                        transcription = client.speech_to_text.convert(
-                            file=audio_file,
-                            model_id=model_name.split("/")[1],
-                            language_code="eng",
-                            tag_audio_events=True,
-                        )
-                return transcription.text
-
-            elif model_name.startswith("revai/"):
-                access_token = os.getenv("REVAI_API_KEY")
-                client = apiclient.RevAiAPIClient(access_token)
-
-                if use_url:
-                    # Submit job with URL for Rev.ai
-                    job = client.submit_job_url(
-                        transcriber=model_name.split("/")[1],
-                        source_config=CustomerUrlData(sample["row"]["audio"][0]["src"]),
-                        metadata="benchmarking_job",
-                    )
-                else:
-                    # Submit job with local file
-                    job = client.submit_job_local_file(
-                        transcriber=model_name.split("/")[1],
-                        filename=audio_file_path,
-                        metadata="benchmarking_job",
-                    )
-
-                # Polling until job is done
-                while True:
-                    job_details = client.get_job_details(job.id)
-                    if job_details.status.name in ["IN_PROGRESS", "TRANSCRIBING"]:
-                        time.sleep(0.1)
-                        continue
-                    elif job_details.status.name == "FAILED":
-                        raise Exception("RevAI transcription failed.")
-                    elif job_details.status.name == "TRANSCRIBED":
-                        break
-
-                transcript_object = client.get_transcript_object(job.id)
-
-                # Combine all words from all monologues
-                transcript_text = []
-                for monologue in transcript_object.monologues:
-                    for element in monologue.elements:
-                        transcript_text.append(element.value)
-
-                return "".join(transcript_text) if transcript_text else ""
-            
-            elif model_name.startswith("google/"):
+            if model_name.startswith("google/"):
                 api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
                 # The genai.Client picks API key from env var GEMINI_API_KEY by default, but allow override
                 client = genai.Client(api_key=api_key) if api_key else genai.Client()
@@ -364,7 +169,7 @@ def transcribe_with_retry(
 
             else:
                 raise ValueError(
-                    "Invalid model prefix, must start with 'assembly/', 'openai/', 'elevenlabs/', 'revai/', 'speechmatics/' or 'google/'"
+                    "Invalid model prefix, must start with 'google/' or 'litellm/''"
                 )
 
         except Exception as e:
@@ -537,6 +342,7 @@ if __name__ == "__main__":
         help="Prefix model name with 'assembly/', 'openai/', 'elevenlabs/', 'revai/', 'speechmatics/', or 'google/'",
     )
     parser.add_argument("--max_samples", type=int, default=None)
+
     parser.add_argument(
         "--max_workers", type=int, default=300, help="Number of concurrent threads"
     )
@@ -547,6 +353,16 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    # If --max_samples not provided, look for env variable
+    if args.max_samples is None:
+        env_max = os.getenv("MAX_SAMPLES")
+        if env_max and env_max.strip():
+            try:
+                args.max_samples = int(env_max)
+                print(f"Using MAX_SAMPLES from environment: {args.max_samples}")
+            except ValueError:
+                print(f"Ignoring invalid MAX_SAMPLES env var value: {env_max}")
 
     transcribe_dataset(
         dataset_path=args.dataset_path,

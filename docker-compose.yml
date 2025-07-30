@@ -25,6 +25,7 @@ services:
       - SPLIT=test          # default; override per-dataset when needed
       - MODEL_NAME=litellm/gemini-flash-lite
       - HF_HOME=/root/.cache/huggingface
+      - MAX_SAMPLES=${MAX_SAMPLES:-}
     profiles: ["_ignore"]   # this hidden profile prevents the anchor from being run
     volumes:
       - ./hf_cache:/root/.cache/huggingface
