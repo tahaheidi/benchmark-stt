@@ -9,21 +9,18 @@ RUN apt-get update && \
 # Set work directory
 WORKDIR /app
 
-# Copy project files
-COPY . /app
+# just the dependency file(s)
+COPY requirements.txt ./      
 
-# Install uv, then use it to install Python dependencies
 RUN pip install uv && \
-    uv venv --clear && \
+    uv venv --clear /opt/venv && \
+    # Activate the venv, then install packages into it
+    . /opt/venv/bin/activate && \
     uv pip install --no-cache --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt && \
-    # Ensure latest google-genai which includes types.Part.from_bytes
     uv pip install --no-cache "google-genai>=0.3.0" && \
-    # Install torchcodec explicitly for audio decoding backend
     uv pip install --no-cache torchcodec==0.5
 
-ENV PATH="/app/.venv/bin:$PATH"
-
-# Ensure project root is on PYTHONPATH so `normalizer` and other local modules are importable
+ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH=/app
 
 # Default command now runs evaluation automatically based on env vars (DATASET_PATH, DATASET, SPLIT, MODEL_NAME)

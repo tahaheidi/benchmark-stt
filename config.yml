@@ -2,12 +2,12 @@ model_list:
   - model_name: gemini-flash-lite         # alias your app uses
     litellm_params:
       model: gemini/gemini-2.5-flash-lite
-      api_key: ${GEMINI_API_KEY}
-    rpm: 120          # allow up to 120 requests per minute
+      api_key: AIzaSyAQRJPlS_o9sQcdlP_op6jI9AqlN6bq3CE
+    rpm: 120         # allow up to 120 requests per minute
     tpm: 600000       # generous tokens-per-minute ceiling
-    max_parallel_requests: 20  # concurrent requests that can be processed
 
 router_settings:
-  routing_strategy: rate-limit-aware
-  enable_pre_call_checks: false
+  enable_pre_call_checks: true
   num_retries: 3
+litellm_settings:
+  set_verbose: True

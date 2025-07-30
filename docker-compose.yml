@@ -5,7 +5,7 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_API_KEY=AIzaSyAQRJPlS_o9sQcdlP_op6jI9AqlN6bq3CE
     ports:
       - "4000:4000"
     volumes:
@@ -28,6 +28,8 @@ services:
     profiles: ["_ignore"]   # this hidden profile prevents the anchor from being run
     volumes:
       - ./hf_cache:/root/.cache/huggingface
+      - ./results:/app/results
+      - ./worker:/app
 
   # ---------------------------------------------------------------------------
   # One service per dataset – enabled only when its profile is selected.
@@ -47,6 +49,7 @@ services:
     <<: *worker-base
     profiles: ["earnings22"]
     environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
       - DATASET=earnings22
       - SPLIT=test
       - MODEL_NAME=litellm/gemini-flash-lite
@@ -55,6 +58,7 @@ services:
     <<: *worker-base
     profiles: ["gigaspeech"]
     environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
       - DATASET=gigaspeech
       - SPLIT=test
       - MODEL_NAME=litellm/gemini-flash-lite
@@ -63,6 +67,7 @@ services:
     <<: *worker-base
     profiles: ["librispeech_clean"]
     environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
       - DATASET=librispeech
       - SPLIT=test.clean
       - MODEL_NAME=litellm/gemini-flash-lite
@@ -71,6 +76,7 @@ services:
     <<: *worker-base
     profiles: ["librispeech_other"]
     environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
       - DATASET=librispeech
       - SPLIT=test.other
       - MODEL_NAME=litellm/gemini-flash-lite
@@ -79,6 +85,7 @@ services:
     <<: *worker-base
     profiles: ["spgispeech"]
     environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
       - DATASET=spgispeech
       - SPLIT=test
       - MODEL_NAME=litellm/gemini-flash-lite
@@ -87,6 +94,7 @@ services:
     <<: *worker-base
     profiles: ["tedlium"]
     environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
       - DATASET=tedlium
       - SPLIT=test
       - MODEL_NAME=litellm/gemini-flash-lite
@@ -95,6 +103,7 @@ services:
     <<: *worker-base
     profiles: ["voxpopuli"]
     environment:
+      - DATASET_PATH=hf-audio/esb-datasets-test-only-sorted
       - DATASET=voxpopuli
       - SPLIT=test
       - MODEL_NAME=litellm/gemini-flash-lite 

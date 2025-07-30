@@ -27,6 +27,8 @@ from requests_toolbelt import MultipartEncoder
 import base64
 from pathlib import Path
 import litellm
+import csv
+import pandas as pd
 
 load_dotenv()
 
@@ -411,102 +413,115 @@ def transcribe_dataset(
         "transcription_time_s": [],
     }
 
-    print(f"Transcribing with model: {model_name}")
+    output_dir = Path("results")
+    output_dir.mkdir(exist_ok=True)
+    model_name_safe = model_name.replace("/", "_")
+    output_path = output_dir / f"{dataset}_{split}_{model_name_safe}.csv"
 
-    def process_sample(sample):
-        if use_url:
-            reference = sample["row"]["text"].strip() or " "
-            audio_duration = sample["row"]["audio_length_s"]
-            start = time.time()
+    # Open file and write header
+    with open(output_path, 'w', newline='', buffering=1) as csvfile:
+        fieldnames = ["dataset", "split", "reference", "transcript", "wer", "rfx"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for i, sample in enumerate(ds):
+            start_time = time.time()
+            reference = ""
             try:
-                transcription = transcribe_with_retry(
-                    model_name, None, sample, use_url=True
-                )
-            except Exception as e:
-                print(f"Failed to transcribe after retries: {e}")
-                return None
-
-        else:
-            reference = sample.get("norm_text", "").strip() or " "
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
-                sf.write(
-                    tmpfile.name,
-                    sample["audio"]["array"],
-                    sample["audio"]["sampling_rate"],
-                    format="WAV",
-                )
-                tmp_path = tmpfile.name
-                audio_duration = (
-                    len(sample["audio"]["array"]) / sample["audio"]["sampling_rate"]
-                )
-
-            start = time.time()
-            try:
-                transcription = transcribe_with_retry(
-                    model_name, tmp_path, sample, use_url=False
-                )
-            except Exception as e:
-                print(f"Failed to transcribe after retries: {e}")
-                os.unlink(tmp_path)
-                return None
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+                if use_url:
+                    transcript = transcribe_with_retry(
+                        model_name, None, sample, use_url=True
+                    )
+                    reference = sample["row"]["text"].strip() or " "
+                    audio_duration = sample["row"]["audio_length_s"]
                 else:
-                    print(f"File {tmp_path} does not exist")
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmpfile:
+                        sf.write(
+                            tmpfile.name,
+                            sample["audio"]["array"],
+                            sample["audio"]["sampling_rate"],
+                        )
+                        transcript = transcribe_with_retry(model_name, tmpfile.name, sample)
+                    reference = sample.get("norm_text", "").strip() or " "
+                    audio_duration = (len(sample["audio"]["array"]) / sample["audio"]["sampling_rate"])
 
-        transcription_time = time.time() - start
-        return reference, transcription, audio_duration, transcription_time
+                end_time = time.time()
+                processing_time = end_time - start_time
+                rfx = processing_time / audio_duration if audio_duration > 0 else 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_sample = {
-            executor.submit(process_sample, sample): sample for sample in ds
-        }
-        for future in tqdm(
-            concurrent.futures.as_completed(future_to_sample),
-            total=len(future_to_sample),
-            desc="Transcribing",
-        ):
-            result = future.result()
-            if result:
-                reference, transcription, audio_duration, transcription_time = result
-                results["predictions"].append(transcription)
-                results["references"].append(reference)
-                results["audio_length_s"].append(audio_duration)
-                results["transcription_time_s"].append(transcription_time)
+                normalized_reference = data_utils.normalizer(reference)
+                normalized_transcript = data_utils.normalizer(transcript)
 
-    results["predictions"] = [
-        data_utils.normalizer(transcription) or " "
-        for transcription in results["predictions"]
-    ]
-    results["references"] = [
-        data_utils.normalizer(reference) or " " for reference in results["references"]
-    ]
+                wer_metric = evaluate.load("wer")
+                if not normalized_reference.strip():
+                    # If reference is empty, WER is 1.0 if transcript is not empty, 0.0 if both are empty.
+                    wer = 1.0 if normalized_transcript.strip() else 0.0
+                else:
+                    wer = wer_metric.compute(
+                        predictions=[normalized_transcript],
+                        references=[normalized_reference],
+                    )
+
+                result_row = {
+                    "dataset": dataset,
+                    "split": split,
+                    "reference": normalized_reference,
+                    "transcript": normalized_transcript,
+                    "wer": wer,
+                    "rfx": rfx,
+                }
+                writer.writerow(result_row)
+                print(f"Processed sample {i+1}, WER: {wer:.4f}, RFx: {rfx:.4f}")
+
+            except Exception as e:
+                print(f"Error processing sample {i+1}: {e}")
+                # Optionally, log the error to the CSV
+                error_row = {
+                    "dataset": dataset,
+                    "split": split,
+                    "reference": data_utils.normalizer(reference) if reference else 'UNKNOWN',
+                    "transcript": f"ERROR: {e}",
+                    "wer": 1.0,  # Assign max WER for errors
+                    "rfx": float("inf"),
+                }
+                writer.writerow(error_row)
+
+    # After loop, load all results from the CSV for final calculation
+    results_df = pd.read_csv(output_path)
+    # Filter out any rows that were errors
+    results_df = results_df[results_df["wer"] != float("inf")]
+
+    final_references = results_df["reference"].astype(str).tolist()
+    final_predictions = results_df["transcript"].astype(str).tolist()
 
     manifest_path = data_utils.write_manifest(
-        results["references"],
-        results["predictions"],
+        final_references,
+        final_predictions,
         model_name.replace("/", "-"),
         dataset_path,
         dataset,
         split,
-        audio_length=results["audio_length_s"],
-        transcription_time=results["transcription_time_s"],
     )
+    print(f"Results manifest saved at path: {manifest_path}")
 
-    print("Results saved at path:", manifest_path)
-
+    # Final WER calculation with protection against empty references
     wer_metric = evaluate.load("wer")
-    wer = wer_metric.compute(
-        references=results["references"], predictions=results["predictions"]
-    )
-    wer_percent = round(100 * wer, 2)
-    rtfx = round(
-        sum(results["audio_length_s"]) / sum(results["transcription_time_s"]), 2
-    )
+    valid_pairs = [(p, r) for p, r in zip(final_predictions, final_references) if str(r).strip()]
+    
+    if not valid_pairs:
+        wer = 1.0 if any(p.strip() for p in final_predictions) else 0.0
+        print("No valid reference transcripts found to calculate final WER.")
+    else:
+        valid_predictions, valid_references = zip(*valid_pairs)
+        wer = wer_metric.compute(predictions=list(valid_predictions), references=list(valid_references))
+    
+    # Calculate average RFx from the successful runs
+    if not results_df.empty:
+        rfx = results_df["rfx"].mean()
+    else:
+        rfx = 0.0
 
-    print("WER:", wer_percent, "%")
-    print("RTFx:", rtfx)
+    print(f"Final WER: {wer:.4f}, Average RFx: {rfx:.4f}")
 
 
 if __name__ == "__main__":
